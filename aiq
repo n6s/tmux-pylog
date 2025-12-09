@@ -5,6 +5,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: aiq [options] question...
+       aiq setup-tmux        # create/prepare tmux session for logging/AI
 
 Options:
   -f, --file PATH       Include PATH as context (repeatable). Use for logs or notes/KB files.
@@ -26,6 +27,38 @@ model="${AIQ_MODEL:-gpt-4o-mini}"
 summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
 reset_summary=0
 context_files=()
+
+if [[ "${1:-}" == "setup-tmux" ]]; then
+  shift
+  session="${AIQ_TMUX_SESSION:-ops}"
+  log_file="${AIQ_TMUX_LOG:-$HOME/.cache/aiq/context.log}"
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux is required for setup-tmux" >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$log_file")"
+
+  if ! tmux has-session -t "$session" 2>/dev/null; then
+    tmux new-session -d -s "$session" -n logs
+  fi
+
+  # Ensure pane 0 in window 0 is piping to the log file.
+  tmux pipe-pane -o -t "${session}:0.0" "tee -a '$log_file'"
+
+  # Ensure an AI window exists at index 1.
+  if ! tmux list-windows -t "$session" -F '#{window_index}' | grep -qx 1; then
+    tmux new-window -t "$session" -n ai
+  fi
+
+  if [[ -z "${TMUX:-}" ]]; then
+    exec tmux attach -t "$session"
+  else
+    echo "tmux session '$session' ready. Logging pane 0.0 to $log_file."
+    exit 0
+  fi
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
