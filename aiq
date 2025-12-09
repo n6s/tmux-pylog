@@ -1,0 +1,48 @@
+#!/bin/bash
+
+lines="${LINES:-200}"
+question="$1"
+
+ctx=""
+
+if [ -f ~/tmux-logs/window-a.log ]; then
+  ctx+="[window-a log, last ${lines} lines]\n"
+  ctx+="$(tail -n "$lines" ~/tmux-logs/window-a.log)\n\n"
+fi
+
+if [ -f ~/tmux-logs/window-b.log ]; then
+  ctx+="[window-b log, last ${lines} lines]\n"
+  ctx+="$(tail -n "$lines" ~/tmux-logs/window-b.log)\n\n"
+fi
+
+ctx+="[your question]\n$question"
+
+printf '%b\n' "$ctx" | python3 -c '
+import os, sys, textwrap
+from openai import OpenAI
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+context = sys.stdin.read()
+
+messages = [
+    {
+        "role": "system",
+        "content": (
+            "You are helping a Linux sysadmin troubleshoot prod systems. "
+            "Understand logs from multiple hosts. "
+            "Never run commands; only point out anomalies or next steps."
+        ),
+    },
+    {"role": "user", "content": context},
+]
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=messages,
+    temperature=0.1,
+)
+
+print("\n=== AI RESPONSE ===\n")
+print(resp.choices[0].message.content.strip())
+print()
+'
