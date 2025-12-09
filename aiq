@@ -1,48 +1,199 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: aiq [options] question...
+
+Options:
+  -f, --file PATH       Include PATH as context (repeatable). Use for logs or notes/KB files.
+  -l, --lines N         Tail N lines from each context file (default: $LINES or 200)
+  -s, --summary PATH    Set rolling session summary file (default: ~/.cache/aiq/summary.txt)
+      --reset-summary   Clear any existing rolling summary before updating
+  -m, --model NAME      OpenAI model to use (default: $AIQ_MODEL or gpt-4o-mini)
+  -h, --help            Show this help message
+
+Notes:
+- Context files are the raw text the model reads now (logs, KB, notes). If none are provided, uses ~/.cache/aiq/context.log by default (override with -f).
+- Summary file is a compact memory the tool maintains across runs; it is not tailed like logs.
+- Set OPENAI_API_KEY in your environment.
+EOF
+}
 
 lines="${LINES:-200}"
-question="$1"
+model="${AIQ_MODEL:-gpt-4o-mini}"
+summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
+reset_summary=0
+context_files=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -f|--file)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      context_files+=("${2/#\~/$HOME}")
+      shift 2
+      ;;
+    -l|--lines)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      lines="$2"
+      shift 2
+      ;;
+    -s|--summary)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      summary_file="${2/#\~/$HOME}"
+      shift 2
+      ;;
+    --reset-summary)
+      reset_summary=1
+      shift
+      ;;
+    -m|--model)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      model="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 1
+fi
+
+question="$*"
+
+if [[ ${#context_files[@]} -eq 0 ]]; then
+  context_files=("$HOME/.cache/aiq/context.log")
+fi
 
 ctx=""
-
-if [ -f ~/tmux-logs/window-a.log ]; then
-  ctx+="[window-a log, last ${lines} lines]\n"
-  ctx+="$(tail -n "$lines" ~/tmux-logs/window-a.log)\n\n"
-fi
-
-if [ -f ~/tmux-logs/window-b.log ]; then
-  ctx+="[window-b log, last ${lines} lines]\n"
-  ctx+="$(tail -n "$lines" ~/tmux-logs/window-b.log)\n\n"
-fi
+for f in "${context_files[@]}"; do
+  label="$f"
+  if [[ -f "$f" ]]; then
+    ctx+="[${label}, last ${lines} lines]\n"
+    ctx+="$(tail -n "$lines" "$f")\n\n"
+  else
+    ctx+="[missing file: ${label}]\n\n"
+  fi
+done
 
 ctx+="[your question]\n$question"
 
-printf '%b\n' "$ctx" | python3 -c '
-import os, sys, textwrap
+summary_enabled=0
+if [[ -n "$summary_file" ]]; then
+  summary_enabled=1
+fi
+
+AIQ_CONTEXT="$ctx" \
+AIQ_MODEL="$model" \
+AIQ_SUMMARY_FILE="$summary_file" \
+AIQ_SUMMARY_ENABLED="$summary_enabled" \
+AIQ_SUMMARY_RESET="$reset_summary" \
+AIQ_QUESTION="$question" \
+python3 - <<'PY'
+import os
+from pathlib import Path
 from openai import OpenAI
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-context = sys.stdin.read()
 
-messages = [
-    {
-        "role": "system",
-        "content": (
-            "You are helping a Linux sysadmin troubleshoot prod systems. "
-            "Understand logs from multiple hosts. "
-            "Never run commands; only point out anomalies or next steps."
-        ),
-    },
-    {"role": "user", "content": context},
-]
+def main() -> None:
+  api_key = os.environ.get("OPENAI_API_KEY")
+  if not api_key:
+    raise SystemExit("OPENAI_API_KEY is required")
 
-resp = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=messages,
-    temperature=0.1,
-)
+  client = OpenAI(api_key=api_key)
+  context = os.environ["AIQ_CONTEXT"]
+  model = os.environ["AIQ_MODEL"]
+  question = os.environ["AIQ_QUESTION"]
 
-print("\n=== AI RESPONSE ===\n")
-print(resp.choices[0].message.content.strip())
-print()
-'
+  summary_enabled = os.environ.get("AIQ_SUMMARY_ENABLED") == "1"
+  summary_reset = os.environ.get("AIQ_SUMMARY_RESET") == "1"
+  summary_file = Path(os.environ.get("AIQ_SUMMARY_FILE") or "")
+
+  rolling_summary = ""
+  if summary_enabled:
+    summary_file.parent.mkdir(parents=True, exist_ok=True)
+    if summary_reset and summary_file.exists():
+      summary_file.write_text("")
+    if summary_file.exists():
+      rolling_summary = summary_file.read_text().strip()
+
+  messages = [
+      {
+          "role": "system",
+          "content": (
+              "You are helping a Linux sysadmin troubleshoot prod systems. "
+              "Understand logs from multiple hosts. "
+              "Never run commands; only point out anomalies or next steps."
+          ),
+      },
+  ]
+
+  if rolling_summary:
+    messages.append(
+        {
+            "role": "system",
+            "content": f"Rolling summary of prior context:\n{rolling_summary}",
+        }
+    )
+
+  messages.append({"role": "user", "content": context})
+
+  resp = client.chat.completions.create(
+      model=model,
+      messages=messages,
+      temperature=0.1,
+  )
+
+  answer = resp.choices[0].message.content.strip()
+  print("\n=== AI RESPONSE ===\n")
+  print(answer)
+  print()
+
+  if summary_enabled:
+    summary_update = client.chat.completions.create(
+        model=model,
+        temperature=0.2,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You maintain a concise rolling summary of a troubleshooting session. "
+                    "Summaries should be 4-8 bullet points, avoiding duplication, "
+                    "and capturing key observations, hypotheses, and next steps."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Existing summary (can be empty):\n{rolling_summary}\n\n"
+                    f"Latest exchange:\nUser question:\n{question}\n\n"
+                    f"Assistant answer:\n{answer}\n"
+                ),
+            },
+        ],
+    )
+    new_summary = summary_update.choices[0].message.content.strip()
+    summary_file.write_text(new_summary + "\n")
+
+
+if __name__ == "__main__":
+  main()
+PY
