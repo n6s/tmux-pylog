@@ -7,7 +7,7 @@ aiq wraps OpenAI to answer questions using log context.
 
 Usage:
   aiq [options] question...
-  aiq setup-tmux                     # create/prepare tmux session for logging + AI panes
+  aiq setup-tmux [--fresh]           # create/prepare tmux session for logging + AI panes
 
 Options:
   -f, --file PATH       Add a context file (repeatable). Use for logs or KB/notes. Defaults to ~/.cache/aiq/context.log if none given.
@@ -23,6 +23,7 @@ Examples:
   aiq -f ~/tmux-logs/window-a.log "Check for errors"                 # override default context file
   aiq --reset-summary "Start fresh"                                  # clear summary first
   aiq setup-tmux                                                      # start/attach ops session with logging
+  aiq setup-tmux --fresh                                              # same, but truncates default context + summary
 
 Requires OPENAI_API_KEY in the environment. Missing context files are noted in the prompt instead of failing. Rolling summaries are kept at ~/.cache/aiq/summary.txt by default to simulate session memory.
 
@@ -31,4 +32,5 @@ Context vs summary:
 - Summary file: compact rolling memory maintained by aiq across runs (not tailed like logs). Default: ~/.cache/aiq/summary.txt; reset with --reset-summary.
 
 tmux helper:
-- `aiq setup-tmux` creates/uses session `ops`, pipes pane 0.0 of window 0 to ~/.cache/aiq/context.log, ensures an AI window at index 1, and attaches if you are not already inside tmux.
+- `aiq setup-tmux` creates/uses session `ops`, pipes pane 0.0 of window 0 to ~/.cache/aiq/context.log (via ansi2txt when available to strip TUI escape codes), ensures an AI window at index 1, and attaches if you are not already inside tmux.
+- `aiq setup-tmux --fresh` additionally truncates the default context log and summary file for a clean slate.
