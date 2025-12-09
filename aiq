@@ -31,10 +31,22 @@ context_files=()
 if [[ "${1:-}" == "setup-tmux" ]]; then
   shift
   fresh=0
-  if [[ "${1:-}" == "--fresh" ]]; then
-    fresh=1
-    shift
-  fi
+  filters=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --fresh)
+        fresh=1
+        shift
+        ;;
+      --filters)
+        filters=1
+        shift
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
   session="${AIQ_TMUX_SESSION:-ops}"
   log_file="${AIQ_TMUX_LOG:-$HOME/.cache/aiq/context.log}"
   summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
@@ -50,12 +62,22 @@ if [[ "${1:-}" == "setup-tmux" ]]; then
     tmux new-session -d -s "$session" -n logs
   fi
 
-  # Ensure pane 0 in window 0 is piping to the log file (strip ANSI if available).
-  pipe_cmd="tee -a '$log_file'"
-  if command -v ansi2txt >/dev/null 2>&1; then
-    pipe_cmd="ansi2txt | tee -a '$log_file'"
+  # Ensure pane 0 in window 0 is piping to the log file (strip ANSI/backspaces when possible).
+  log_quoted="$(printf "%q" "$log_file")"
+  pipe_cmd="sh -c \"tee -a $log_quoted\""
+  if [[ $filters -eq 1 ]]; then
+    ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
+    col_cmd="$(command -v col 2>/dev/null || true)"
+    if [[ -z "$ansi_cmd" || -z "$col_cmd" ]]; then
+      echo "Warning: --filters requested but ansi2txt/col not found; falling back to raw logging." >&2
+    else
+      pipe_cmd="sh -c \"$ansi_cmd | $col_cmd -b | tee -a $log_quoted\""
+    fi
   fi
-  tmux pipe-pane -o -t "${session}:0.0" "$pipe_cmd"
+
+  # Reset and reapply the pipe to avoid stale commands.
+  tmux pipe-pane -t "${session}:0.0" ""
+  tmux pipe-pane -t "${session}:0.0" "$pipe_cmd"
 
   # Ensure an AI window exists at index 1.
   if ! tmux list-windows -t "$session" -F '#{window_index}' | grep -qx 1; then
