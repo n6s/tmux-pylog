@@ -151,10 +151,14 @@ def main() -> None:
   if not api_key:
     raise SystemExit("OPENAI_API_KEY is required")
 
+  def sanitize(text: str) -> str:
+    # Replace any surrogate/unpaired bytes to keep JSON encoding happy.
+    return text.encode("utf-8", "replace").decode("utf-8")
+
   client = OpenAI(api_key=api_key)
-  context = os.environ["AIQ_CONTEXT"]
+  context = sanitize(os.environ["AIQ_CONTEXT"])
   model = os.environ["AIQ_MODEL"]
-  question = os.environ["AIQ_QUESTION"]
+  question = sanitize(os.environ["AIQ_QUESTION"])
 
   summary_enabled = os.environ.get("AIQ_SUMMARY_ENABLED") == "1"
   summary_reset = os.environ.get("AIQ_SUMMARY_RESET") == "1"
@@ -166,7 +170,7 @@ def main() -> None:
     if summary_reset and summary_file.exists():
       summary_file.write_text("")
     if summary_file.exists():
-      rolling_summary = summary_file.read_text().strip()
+      rolling_summary = sanitize(summary_file.read_text(errors="replace")).strip()
 
   messages = [
       {
