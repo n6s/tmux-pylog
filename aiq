@@ -31,15 +31,10 @@ context_files=()
 if [[ "${1:-}" == "setup-tmux" ]]; then
   shift
   fresh=0
-  filters=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --fresh)
         fresh=1
-        shift
-        ;;
-      --filters)
-        filters=1
         shift
         ;;
       *)
@@ -63,17 +58,11 @@ if [[ "${1:-}" == "setup-tmux" ]]; then
   fi
 
   # Ensure pane 0 in window 0 is piping to the log file (strip ANSI/backspaces when possible).
+  ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
+  col_cmd="$(command -v col 2>/dev/null || true)"
+
   log_quoted="$(printf "%q" "$log_file")"
-  pipe_cmd="sh -c \"tee -a $log_quoted\""
-  if [[ $filters -eq 1 ]]; then
-    ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
-    col_cmd="$(command -v col 2>/dev/null || true)"
-    if [[ -z "$ansi_cmd" || -z "$col_cmd" ]]; then
-      echo "Warning: --filters requested but ansi2txt/col not found; falling back to raw logging." >&2
-    else
-      pipe_cmd="sh -c \"$ansi_cmd | $col_cmd -b | tee -a $log_quoted\""
-    fi
-  fi
+  pipe_cmd="tee -a $log_quoted"
 
   # Reset and reapply the pipe to avoid stale commands.
   tmux pipe-pane -t "${session}:0.0" ""

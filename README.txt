@@ -32,5 +32,5 @@ Context vs summary:
 - Summary file: compact rolling memory maintained by aiq across runs (not tailed like logs). Default: ~/.cache/aiq/summary.txt; reset with --reset-summary.
 
 tmux helper:
-- `aiq setup-tmux [--filters]` creates/uses session `ops`, pipes pane 0.0 of window 0 to ~/.cache/aiq/context.log (plain tee by default; with --filters it tries ansi2txt and col -b, otherwise falls back to raw), ensures an AI window at index 1, and attaches if you are not already inside tmux.
+- `aiq setup-tmux` creates/uses session `ops`, pipes pane 0.0 of window 0 to ~/.cache/aiq/context.log (plain tee; use your own filters if desired), ensures an AI window at index 1, and attaches if you are not already inside tmux.
 - `aiq setup-tmux --fresh` additionally truncates the default context log and summary file for a clean slate.
