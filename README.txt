@@ -13,6 +13,7 @@ Options:
   -f, --file PATH       Add a context file (repeatable). Use for logs or KB/notes. Defaults to ~/.cache/aiq/context.log if none given.
   -l, --lines N         Tail N lines per context file (default: $LINES or 200).
   -s, --summary PATH    Rolling session summary file (default: ~/.cache/aiq/summary.txt). Use --reset-summary to clear first.
+      --no-filter       Disable filtering; read context files as-is (default filters via ansi2txt | col -b into filtered-* files).
   -m, --model NAME      Model to use (default: $AIQ_MODEL or gpt-4o-mini).
   -h, --help            Show help.
 
@@ -34,3 +35,6 @@ Context vs summary:
 tmux helper:
 - `aiq setup-tmux` creates/uses session `ops`, pipes pane 0.0 of window 0 to ~/.cache/aiq/context.log (plain tee; use your own filters if desired), ensures an AI window at index 1, and attaches if you are not already inside tmux.
 - `aiq setup-tmux --fresh` additionally truncates the default context log and summary file for a clean slate.
+
+Filtering notes:
+- By default aiq filters each context file through ansi2txt | col -b into a sibling filtered-<name> and tails that. Missing filters fall back to raw files. Use --no-filter to skip filtering entirely.

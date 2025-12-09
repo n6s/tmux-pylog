@@ -12,11 +12,13 @@ Options:
   -l, --lines N         Tail N lines from each context file (default: $LINES or 200)
   -s, --summary PATH    Set rolling session summary file (default: ~/.cache/aiq/summary.txt)
       --reset-summary   Clear any existing rolling summary before updating
+      --no-filter       Disable filtering; read context files as-is
   -m, --model NAME      OpenAI model to use (default: $AIQ_MODEL or gpt-4o-mini)
   -h, --help            Show this help message
 
 Notes:
 - Context files are the raw text the model reads now (logs, KB, notes). If none are provided, uses ~/.cache/aiq/context.log by default (override with -f).
+- By default, aiq filters context files through ansi2txt | col -b into a sibling filtered-<name> before tailing; use --no-filter to skip.
 - Summary file is a compact memory the tool maintains across runs; it is not tailed like logs.
 - Set OPENAI_API_KEY in your environment.
 EOF
@@ -27,6 +29,7 @@ model="${AIQ_MODEL:-gpt-4o-mini}"
 summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
 reset_summary=0
 context_files=()
+filter_enabled=1
 
 if [[ "${1:-}" == "setup-tmux" ]]; then
   shift
@@ -96,6 +99,10 @@ while [[ $# -gt 0 ]]; do
       context_files+=("${2/#\~/$HOME}")
       shift 2
       ;;
+    --no-filter)
+      filter_enabled=0
+      shift
+      ;;
     -l|--lines)
       [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
       lines="$2"
@@ -149,8 +156,28 @@ ctx=""
 for f in "${context_files[@]}"; do
   label="$f"
   if [[ -f "$f" ]]; then
-    ctx+="[${label}, last ${lines} lines]"$'\n'
-    ctx+="$(tail -n "$lines" "$f")"$'\n\n'
+    target_file="$f"
+    filter_note=""
+    if [[ $filter_enabled -eq 1 ]]; then
+      ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
+      col_cmd="$(command -v col 2>/dev/null || true)"
+      if [[ -n "$ansi_cmd" && -n "$col_cmd" ]]; then
+        filtered_file="$(dirname "$f")/filtered-$(basename "$f")"
+        if "$ansi_cmd" <"$f" | "$col_cmd" -b >"$filtered_file"; then
+          target_file="$filtered_file"
+          filter_note=" (filtered)"
+        else
+          filter_note=" (filter failed, raw)"
+        fi
+      else
+        filter_note=" (filter unavailable, raw)"
+      fi
+    else
+      filter_note=" (raw)"
+    fi
+
+    ctx+="[${label}${filter_note}, last ${lines} lines]"$'\n'
+    ctx+="$(tail -n "$lines" "$target_file")"$'\n\n'
   else
     ctx+="[missing file: ${label}]"$'\n\n'
   fi
