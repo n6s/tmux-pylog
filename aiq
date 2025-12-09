@@ -138,14 +138,14 @@ ctx=""
 for f in "${context_files[@]}"; do
   label="$f"
   if [[ -f "$f" ]]; then
-    ctx+="[${label}, last ${lines} lines]\n"
-    ctx+="$(tail -n "$lines" "$f")\n\n"
+    ctx+="[${label}, last ${lines} lines]"$'\n'
+    ctx+="$(tail -n "$lines" "$f")"$'\n\n'
   else
-    ctx+="[missing file: ${label}]\n\n"
+    ctx+="[missing file: ${label}]"$'\n\n'
   fi
 done
 
-ctx+="[your question]\n$question"
+ctx+="[your question]"$'\n'"$question"
 
 summary_enabled=0
 if [[ -n "$summary_file" ]]; then
