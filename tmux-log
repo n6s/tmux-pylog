@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: tmux-log [options]
+
+Options:
+  -s, --session NAME   tmux session name (default: $AIQ_TMUX_SESSION or ops)
+  -t, --target WIN.P   target pane to log (default: $AIQ_TMUX_TARGET or 0.0)
+  -l, --log PATH       log file path (default: $AIQ_TMUX_LOG or ~/.cache/tmux-log/window0.log)
+      --raw            do not clean ANSI/backspaces; write raw output
+      --fresh          truncate the log file before piping
+  -h, --help           show this help message
+
+Behavior:
+- Ensures the tmux session exists (creates if missing).
+- Pipes the chosen pane to the log file (optionally cleaned via ansi2txt | col -b when available).
+- Attaches if you are not already inside tmux; otherwise prints a ready message.
+EOF
+}
+
+session="${AIQ_TMUX_SESSION:-ops}"
+target="${AIQ_TMUX_TARGET:-0.0}"
+log_file="${AIQ_TMUX_LOG:-$HOME/.cache/tmux-log/window0.log}"
+raw=0
+fresh=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--session)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      session="$2"
+      shift 2
+      ;;
+    -t|--target)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      target="$2"
+      shift 2
+      ;;
+    -l|--log)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      log_file="${2/#\~/$HOME}"
+      shift 2
+      ;;
+    --raw)
+      raw=1
+      shift
+      ;;
+    --fresh)
+      fresh=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$log_file")"
+log_quoted="$(printf "%q" "$log_file")"
+
+if [[ $fresh -eq 1 ]]; then
+  : > "$log_file"
+fi
+
+if ! tmux has-session -t "$session" 2>/dev/null; then
+  tmux new-session -d -s "$session" -n logs
+fi
+
+# Build the pipe command with optional cleaning of ANSI/backspaces.
+pipe_cmd=""
+if [[ $raw -eq 1 ]]; then
+  pipe_cmd="tee -a $log_quoted"
+else
+  ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
+  col_cmd="$(command -v col 2>/dev/null || true)"
+  if [[ -n "$ansi_cmd" && -n "$col_cmd" ]]; then
+    pipe_cmd="$ansi_cmd | $col_cmd -b | tee -a $log_quoted"
+  else
+    pipe_cmd="tee -a $log_quoted"
+  fi
+fi
+
+# Reset and apply logging to the target pane.
+tmux pipe-pane -t "${session}:${target}" ""
+tmux pipe-pane -t "${session}:${target}" "$pipe_cmd"
+
+if [[ -z "${TMUX:-}" ]]; then
+  exec tmux attach -t "$session"
+else
+  echo "tmux session '${session}' ready. Logging pane ${target} to ${log_file}."
+fi
