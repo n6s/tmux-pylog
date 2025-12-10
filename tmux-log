@@ -7,9 +7,9 @@ usage() {
 Usage: tmux-log [options]
 
 Options:
-  -s, --session NAME   tmux session name (default: $AIQ_TMUX_SESSION or ops)
-  -t, --target WIN.P   target pane to log (default: $AIQ_TMUX_TARGET or 0.0)
-  -l, --log PATH       log file path (default: $AIQ_TMUX_LOG or ~/.cache/tmux-log/window0.log)
+  -s, --session NAME   tmux session name (default: $TMUX_LOG_SESSION or ops)
+  -t, --target WIN.P   target pane to log (default: $TMUX_LOG_TARGET or 0.0)
+  -l, --log PATH       log file path (default: $TMUX_LOG_PATH or ~/.cache/tmux-log/window0.log)
       --raw            do not clean ANSI/backspaces; write raw output
       --fresh          truncate the log file before piping
   -h, --help           show this help message
@@ -21,9 +21,9 @@ Behavior:
 EOF
 }
 
-session="${AIQ_TMUX_SESSION:-ops}"
-target="${AIQ_TMUX_TARGET:-0.0}"
-log_file="${AIQ_TMUX_LOG:-$HOME/.cache/tmux-log/window0.log}"
+session="${TMUX_LOG_SESSION:-ops}"
+target="${TMUX_LOG_TARGET:-0.0}"
+log_file="${TMUX_LOG_PATH:-$HOME/.cache/tmux-log/window0.log}"
 raw=0
 fresh=0
 
