@@ -10,14 +10,14 @@ Usage: aiq [options] question...
 Options:
   -f, --file PATH       Include PATH as context (repeatable). Use for logs or notes/KB files.
   -l, --lines N         Tail N lines from each context file (default: $LINES or 200)
-  -s, --summary PATH    Set rolling session summary file (default: ~/.cache/aiq/summary.txt)
+  -s, --summary PATH    Set rolling session summary file (default: ~/.cache/tmux-log/summary.txt)
       --reset-summary   Clear any existing rolling summary before updating
       --no-filter       Disable filtering; read context files as-is
   -m, --model NAME      OpenAI model to use (default: $AIQ_MODEL or gpt-4o-mini)
   -h, --help            Show this help message
 
 Notes:
-- Context files are the raw text the model reads now (logs, KB, notes). If none are provided, uses ~/.cache/aiq/context.log by default (override with -f).
+- Context files are the raw text the model reads now (logs, KB, notes). If none are provided, uses ~/.cache/tmux-log/window0.log by default (override with -f).
 - By default, aiq filters context files through ansi2txt | col -b into a sibling filtered-<name> before tailing; use --no-filter to skip.
 - Summary file is a compact memory the tool maintains across runs; it is not tailed like logs.
 - Set OPENAI_API_KEY in your environment.
@@ -26,7 +26,7 @@ EOF
 
 lines="${LINES:-200}"
 model="${AIQ_MODEL:-gpt-4o-mini}"
-summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
+summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/tmux-log/summary.txt}"
 reset_summary=0
 context_files=()
 filter_enabled=1
@@ -46,8 +46,8 @@ if [[ "${1:-}" == "setup-tmux" ]]; then
     esac
   done
   session="${AIQ_TMUX_SESSION:-ops}"
-  log_file="${AIQ_TMUX_LOG:-$HOME/.cache/aiq/context.log}"
-  summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/aiq/summary.txt}"
+  log_file="${AIQ_TMUX_LOG:-$HOME/.cache/tmux-log/window0.log}"
+  summary_file="${AIQ_SUMMARY_FILE:-$HOME/.cache/tmux-log/summary.txt}"
 
   if ! command -v tmux >/dev/null 2>&1; then
     echo "tmux is required for setup-tmux" >&2
@@ -149,7 +149,7 @@ fi
 question="$*"
 
 if [[ ${#context_files[@]} -eq 0 ]]; then
-  context_files=("$HOME/.cache/aiq/context.log")
+  context_files=("$HOME/.cache/tmux-log/window0.log")
 fi
 
 ctx=""
