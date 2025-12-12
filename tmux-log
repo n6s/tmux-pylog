@@ -118,7 +118,25 @@ if [[ $current -eq 1 ]]; then
 fi
 
 mkdir -p "$(dirname "$log_file")"
-log_quoted="$(printf "%q" "$log_file")"
+
+sh_quote() {
+  local s="$1"
+  s=${s//\'/\'\"\'\"\'}
+  printf "'%s'" "$s"
+}
+
+resolve_cmd() {
+  command -v "$1" 2>/dev/null || true
+}
+
+stdbuf_cmd="$(resolve_cmd stdbuf)"
+sed_cmd="$(resolve_cmd sed)"
+tee_cmd="$(resolve_cmd tee)"
+if [[ -z "$tee_cmd" ]]; then
+  tee_cmd="tee"
+fi
+
+log_sh="$(sh_quote "$log_file")"
 
 if [[ $fresh -eq 1 ]]; then
   : > "$log_file"
@@ -155,14 +173,23 @@ fi
 # Build the pipe command with optional cleaning of ANSI/backspaces.
 pipe_cmd=""
 if [[ $raw -eq 1 ]]; then
-  pipe_cmd="tee -a $log_quoted"
-else
-  ansi_cmd="$(command -v ansi2txt 2>/dev/null || true)"
-  col_cmd="$(command -v col 2>/dev/null || true)"
-  if [[ -n "$ansi_cmd" && -n "$col_cmd" ]]; then
-    pipe_cmd="$ansi_cmd | $col_cmd -b | tee -a $log_quoted"
+  if [[ -n "$stdbuf_cmd" ]]; then
+    pipe_cmd="$stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
   else
-    pipe_cmd="tee -a $log_quoted"
+    pipe_cmd="$tee_cmd -a $log_sh"
+  fi
+else
+  ansi_cmd="$(resolve_cmd ansi2txt)"
+  # Avoid `col -b` here: it buffers until EOF on some systems, which makes the
+  # log look empty while tmux piping is active.
+  if [[ -n "$sed_cmd" && -n "$stdbuf_cmd" ]]; then
+    if [[ -n "$ansi_cmd" ]]; then
+      pipe_cmd="$stdbuf_cmd -oL -eL $ansi_cmd | $stdbuf_cmd -oL -eL $sed_cmd -r ':a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
+    else
+      pipe_cmd="$stdbuf_cmd -oL -eL $sed_cmd -r 's/\\x1B\\[[0-9;]*[[:alpha:]]//g; :a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
+    fi
+  else
+    pipe_cmd="$tee_cmd -a $log_sh"
   fi
 fi
 
@@ -171,6 +198,10 @@ tmux pipe-pane -t "${session}:${target}" ""
 tmux pipe-pane -t "${session}:${target}" "$pipe_cmd"
 
 if [[ -z "${TMUX:-}" ]]; then
+  target_window="${target%%.*}"
+  tmux select-window -t "${session}:${target_window}" 2>/dev/null || true
+  tmux select-pane -t "${session}:${target}" 2>/dev/null || true
+  echo "tmux session '${session}' ready. Logging pane ${target} to ${log_file}."
   exec tmux attach -t "$session"
 else
   echo "tmux session '${session}' ready. Logging pane ${target} to ${log_file}."
