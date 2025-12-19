@@ -10,7 +10,7 @@ Then ask Codex to read the log file you pointed tmux at (default: ~/.cache/tmux-
 What it does:
 - Ensures the tmux session exists (default `ops`; override with TMUX_LOG_SESSION or -s).
 - Pipes the target pane (default `0.0`; override with TMUX_LOG_TARGET or -t) to the log file (default `~/.cache/tmux-log/window0.log`; override with TMUX_LOG_PATH or -l).
-- Cleans ANSI/backspaces via ansi2txt | col -b when available; use `--raw` to skip cleaning.
+- Cleans ANSI/backspaces via ansi2txt when available, otherwise uses sed-based cleanup; use `--raw` to skip cleaning.
 - Attaches if you are not already inside tmux; otherwise prints a ready message.
 
 Options:
@@ -29,6 +29,6 @@ Suggested tmux key binding (put in ~/.tmux.conf):
 
 Manual alternative (without tmux-log):
   tmux new -s ops
-  tmux pipe-pane -o -t ops:0.0 'ansi2txt | col -b | tee -a ~/.cache/tmux-log/window0.log'  # or drop filters if not installed
+  tmux pipe-pane -o -t ops:0.0 'ansi2txt | sed -r ":a; s/.\x08//; ta" | tee -a ~/.cache/tmux-log/window0.log'
 
 Dependencies: tmux. Optional: ansi2txt and col for cleaner logs.

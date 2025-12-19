@@ -19,7 +19,7 @@ Options:
 
 Behavior:
 - Ensures the tmux session exists (creates if missing).
-- Pipes the chosen pane to the log file (optionally cleaned via ansi2txt | col -b when available).
+- Pipes the chosen pane to the log file (optionally cleaned via ansi2txt when available, otherwise sed-based ANSI/backspace cleanup).
 - Attaches if you are not already inside tmux; otherwise prints a ready message.
 EOF
 }
