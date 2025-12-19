@@ -165,9 +165,9 @@ else
   # log look empty while tmux piping is active.
   if [[ -n "$sed_cmd" && -n "$stdbuf_cmd" ]]; then
     if [[ -n "$ansi_cmd" ]]; then
-      pipe_cmd="$stdbuf_cmd -oL -eL $ansi_cmd | $stdbuf_cmd -oL -eL $sed_cmd -r ':a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
+      pipe_cmd="$stdbuf_cmd -oL -eL $ansi_cmd | $stdbuf_cmd -oL -eL $sed_cmd -r 's/\\r/\\n/g; :a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
     else
-      pipe_cmd="$stdbuf_cmd -oL -eL $sed_cmd -r 's/\\x1B\\[[0-9;]*[[:alpha:]]//g; :a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
+      pipe_cmd="$stdbuf_cmd -oL -eL $sed_cmd -r 's/\\r/\\n/g; s/\\x1B\\[[0-9;]*[[:alpha:]]//g; :a; s/.\\x08//; ta' | $stdbuf_cmd -oL -eL $tee_cmd -a $log_sh"
     fi
   else
     pipe_cmd="$tee_cmd -a $log_sh"
