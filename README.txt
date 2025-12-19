@@ -6,14 +6,11 @@ Quick start:
   ./tmux-log -s ops -t 1.0 -l ~/tmux-logs/ops.log # custom session/pane/log path
   ./tmux-log --current --fresh --auto-log         # inside tmux: log the active pane to ~/.cache/tmux-log/<session>/w<pane>.log (truncate first)
 Then ask Codex to read the log file you pointed tmux at (default: ~/.cache/tmux-log/window0.log).
-Window 1 ("codex") is auto-created with commented sample prompts you can edit/copy into Codex.
-If ~/venv/ansible9/bin/activate exists (or TMUX_LOG_VENV points elsewhere), that venv is sourced in the codex window.
 
 What it does:
 - Ensures the tmux session exists (default `ops`; override with TMUX_LOG_SESSION or -s).
 - Pipes the target pane (default `0.0`; override with TMUX_LOG_TARGET or -t) to the log file (default `~/.cache/tmux-log/window0.log`; override with TMUX_LOG_PATH or -l).
 - Cleans ANSI/backspaces via ansi2txt | col -b when available; use `--raw` to skip cleaning.
-- Creates a helper window at index 1 named "codex" with commented sample prompts and a sample pipe-pane command to log another pane.
 - Attaches if you are not already inside tmux; otherwise prints a ready message.
 
 Options:

@@ -27,7 +27,6 @@ EOF
 session="${TMUX_LOG_SESSION:-ops}"
 target="${TMUX_LOG_TARGET:-0.0}"
 log_file="${TMUX_LOG_PATH:-$HOME/.cache/tmux-log/window0.log}"
-venv_activate="${TMUX_LOG_VENV:-$HOME/venv/ansible9/bin/activate}"
 raw=0
 fresh=0
 current=0
@@ -150,24 +149,6 @@ fi
 
 if ! tmux has-session -t "$session" 2>/dev/null; then
   tmux new-session -d -s "$session" -n logs
-fi
-
-# Ensure a helper window with commented Codex prompts exists at index 1.
-if ! tmux list-windows -t "$session" -F '#{window_index}' | grep -qx 1; then
-  sample_prompt="# Codex prompt ideas (copy/paste then edit):
-# Read ${log_file}, last 300 lines. Summarize new errors and unusual patterns.
-# If multiple logs, name each path and what to compare.
-# Add timeframe or hypothesis to focus the answer.
-#
-# To start logging another pane, for example window 1 pane 0:
-# tmux pipe-pane -o -t ${session}:1.0 'ansi2txt | col -b | tee -a ~/.cache/tmux-log/window1.log'"
-
-  codex_cmd=""
-  if [[ -f "$venv_activate" ]]; then
-    codex_cmd+="source $(printf "%q" "$venv_activate"); "
-  fi
-  codex_cmd+="printf '%s\n' \"$sample_prompt\"; exec \$SHELL"
-  tmux new-window -t "$session" -n codex "$codex_cmd"
 fi
 
 # Build the pipe command with optional cleaning of ANSI/backspaces.
