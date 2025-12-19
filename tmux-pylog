@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+
+import os
+import shutil
+import subprocess
+import sys
+import shlex
+
+
+USAGE = """\
+tmux-pylog
+
+Starts/attaches tmux session "ops" and logs a new window's pane 0 with a
+Python filter that removes ANSI sequences and preserves the final line when
+carriage returns or backspaces are used (e.g., Ctrl-R).
+"""
+
+
+PY_FILTER = r"""
+import sys
+
+buf = bytearray()
+out = sys.stdout.buffer
+inp = sys.stdin.buffer
+cursor = 0
+sav_cursor = 0
+saw_cr = False
+
+def read_byte():
+    b = inp.read(1)
+    if not b:
+        return None
+    return b[0]
+
+def write_line():
+    out.write(buf)
+    out.write(b"\n")
+    out.flush()
+
+def reset_line():
+    buf.clear()
+    return 0
+
+def insert_char(ch):
+    global cursor
+    if cursor < 0:
+        cursor = 0
+    if cursor >= len(buf):
+        buf.append(ch)
+    else:
+        buf[cursor] = ch
+    cursor += 1
+
+def handle_csi(final_byte, params):
+    global cursor, sav_cursor
+    if final_byte == ord("C"):  # cursor right
+        cursor += params[0] if params else 1
+        if cursor > len(buf):
+            cursor = len(buf)
+        return
+    if final_byte == ord("D"):  # cursor left
+        cursor -= params[0] if params else 1
+        if cursor < 0:
+            cursor = 0
+        return
+    if final_byte == ord("G"):  # cursor horizontal absolute (1-based)
+        n = params[0] if params else 1
+        cursor = max(0, n - 1)
+        if cursor > len(buf):
+            cursor = len(buf)
+        return
+    if final_byte in (ord("H"), ord("f")):  # cursor position (row;col)
+        if params and len(params) >= 2:
+            cursor = max(0, params[1] - 1)
+        else:
+            cursor = 0
+        if cursor > len(buf):
+            cursor = len(buf)
+        return
+    if final_byte == ord("s"):  # save cursor
+        sav_cursor = cursor
+        return
+    if final_byte == ord("u"):  # restore cursor
+        cursor = sav_cursor
+        if cursor > len(buf):
+            cursor = len(buf)
+        if cursor < 0:
+            cursor = 0
+        return
+    if final_byte == ord("K"):  # erase in line
+        n = params[0] if params else 0
+        if n == 0:
+            del buf[cursor:]
+        elif n == 1:
+            del buf[:cursor]
+            cursor = 0
+        elif n == 2:
+            cursor = reset_line()
+        return
+    if final_byte == ord("X"):  # erase chars
+        n = params[0] if params else 1
+        if n > 0:
+            del buf[cursor:cursor + n]
+        return
+    if final_byte == ord("P"):  # delete chars
+        n = params[0] if params else 1
+        if n > 0:
+            del buf[cursor:cursor + n]
+        return
+    if final_byte == ord("@"):  # insert blanks
+        n = params[0] if params else 1
+        if n > 0:
+            buf[cursor:cursor] = b" " * n
+        return
+
+while True:
+    c = read_byte()
+    if c is None:
+        if buf:
+            out.write(buf)
+            out.flush()
+        break
+
+    if saw_cr:
+        if c == 10:  # \n (CRLF)
+            write_line()
+            cursor = reset_line()
+            saw_cr = False
+            continue
+        cursor = 0
+        saw_cr = False
+
+    if c == 10:  # \n
+        write_line()
+        cursor = reset_line()
+        continue
+    if c == 13:  # \r
+        saw_cr = True
+        continue
+    if c == 7:  # BEL (readline "beep" on no match)
+        continue
+    if c == 8:  # backspace: move cursor left
+        if cursor > 0:
+            cursor -= 1
+        continue
+    if c == 127:  # delete
+        if cursor < len(buf):
+            del buf[cursor:cursor + 1]
+        continue
+    if c == 27:  # ESC: parse ANSI escape sequences
+        n = read_byte()
+        if n is None:
+            break
+        if n == 55:  # ESC 7: save cursor
+            sav_cursor = cursor
+            continue
+        if n == 56:  # ESC 8: restore cursor
+            cursor = sav_cursor
+            if cursor > len(buf):
+                cursor = len(buf)
+            if cursor < 0:
+                cursor = 0
+            continue
+        if n == 91:  # '[' (CSI)
+            params = []
+            current = ""
+            while True:
+                n = read_byte()
+                if n is None:
+                    break
+                if 48 <= n <= 57:  # 0-9
+                    current += chr(n)
+                    continue
+                if n == 59:  # ';'
+                    params.append(int(current) if current else 0)
+                    current = ""
+                    continue
+                if 64 <= n <= 126:
+                    if current or params:
+                        params.append(int(current) if current else 0)
+                    handle_csi(n, params)
+                    break
+            continue
+        if n == 93:  # ']' (OSC)
+            prev = None
+            while True:
+                n = read_byte()
+                if n is None:
+                    break
+                if n == 7:  # BEL
+                    break
+                if prev == 27 and n == 92:  # ESC \
+                    break
+                prev = n
+            continue
+        continue
+
+    insert_char(c)
+"""
+
+
+def run_tmux(args, capture=False, check=True):
+    return subprocess.run(
+        ["tmux", *args],
+        check=check,
+        text=True,
+        capture_output=capture,
+    )
+
+
+def tmux_session_exists(name):
+    return subprocess.run(
+        ["tmux", "has-session", "-t", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+
+
+def first_window_index(session):
+    result = run_tmux(["list-windows", "-t", session, "-F", "#{window_index}"], capture=True)
+    return result.stdout.strip().splitlines()[0]
+
+
+def main():
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ("-h", "--help"):
+            print(USAGE)
+            return 0
+        print(f"Unknown option: {sys.argv[1]}", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 1
+
+    if not shutil.which("tmux"):
+        print("tmux is required", file=sys.stderr)
+        return 1
+
+    session = "ops"
+    pane_index = "0"
+    created_session = False
+
+    if tmux_session_exists(session):
+        result = run_tmux(["new-window", "-t", session, "-P", "-F", "#{window_index}"], capture=True)
+        window_index = result.stdout.strip()
+    else:
+        run_tmux(["new-session", "-d", "-s", session])
+        created_session = True
+        window_index = first_window_index(session)
+
+    target = f"{window_index}.{pane_index}"
+
+    log_dir = os.path.join(os.path.expanduser("~"), ".cache", "tmux-log", session)
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"w{window_index}p{pane_index}.log")
+    raw_log_file = os.path.join(log_dir, f"raw-w{window_index}p{pane_index}.log")
+
+    python_cmd = f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_FILTER)}"
+    tee_cmd = "tee"
+    stdbuf = shutil.which("stdbuf")
+    if stdbuf:
+        tee_cmd = f"{stdbuf} -oL -eL {tee_cmd}"
+
+    pipe_cmd = (
+        f"{tee_cmd} -a {shlex.quote(raw_log_file)}"
+        f" | {python_cmd}"
+        f" | {tee_cmd} -a {shlex.quote(log_file)}"
+    )
+
+    run_tmux(["pipe-pane", "-t", f"{session}:{target}", ""])
+    run_tmux(["pipe-pane", "-t", f"{session}:{target}", pipe_cmd])
+
+    if "TMUX" not in os.environ:
+        run_tmux(["select-window", "-t", f"{session}:{window_index}"])
+        run_tmux(["select-pane", "-t", f"{session}:{target}"])
+        os.execvp("tmux", ["tmux", "attach", "-t", session])
+
+    if created_session:
+        print(f"tmux session '{session}' ready. Logging pane {target} to {log_file}.")
+    else:
+        print(f"tmux session '{session}' ready. Logging new pane {target} to {log_file}.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
