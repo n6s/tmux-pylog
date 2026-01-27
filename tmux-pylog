@@ -25,6 +25,8 @@ inp = sys.stdin.buffer
 cursor = 0
 sav_cursor = 0
 saw_cr = False
+alt_screen = False
+alt_suppressed = False
 
 def read_byte():
     b = inp.read(1)
@@ -33,13 +35,31 @@ def read_byte():
     return b[0]
 
 def write_line():
-    out.write(buf)
+    line = bytes(buf)
+    if should_suppress_line(line):
+        out.write(b"[tui output suppressed]\n")
+        out.flush()
+        return
+    out.write(line)
     out.write(b"\n")
     out.flush()
 
 def reset_line():
     buf.clear()
     return 0
+
+def should_suppress_line(line):
+    if not line:
+        return False
+    if b"VIM - Vi IMproved" in line or b"AllVIM - Vi IMproved" in line:
+        return True
+    if b"Press ENTER or type command to continue" in line:
+        return True
+    if len(line) > 300:
+        tildes = line.count(b"~")
+        if tildes > 20 and tildes * 5 > len(line):
+            return True
+    return False
 
 def insert_char(ch):
     global cursor
@@ -51,8 +71,27 @@ def insert_char(ch):
         buf[cursor] = ch
     cursor += 1
 
-def handle_csi(final_byte, params):
-    global cursor, sav_cursor
+def handle_csi(final_byte, params, private):
+    global cursor, sav_cursor, alt_screen, alt_suppressed, saw_cr
+    if private and final_byte in (ord("h"), ord("l")):
+        is_alt = any(p in (47, 1047, 1048, 1049) for p in params)
+        if is_alt:
+            if final_byte == ord("h"):
+                alt_screen = True
+                alt_suppressed = True
+                cursor = reset_line()
+                saw_cr = False
+            else:
+                if alt_suppressed:
+                    out.write(b"[alt-screen suppressed]\n")
+                    out.flush()
+                    alt_suppressed = False
+                alt_screen = False
+                cursor = reset_line()
+                saw_cr = False
+            return
+    if alt_screen:
+        return
     if final_byte == ord("C"):  # cursor right
         cursor += params[0] if params else 1
         if cursor > len(buf):
@@ -130,6 +169,9 @@ while True:
         cursor = 0
         saw_cr = False
 
+    if alt_screen and c != 27:
+        continue
+
     if c == 10:  # \n
         write_line()
         cursor = reset_line()
@@ -162,12 +204,16 @@ while True:
                 cursor = 0
             continue
         if n == 91:  # '[' (CSI)
+            private = False
             params = []
             current = ""
             while True:
                 n = read_byte()
                 if n is None:
                     break
+                if n == 63 and not current and not params:  # '?'
+                    private = True
+                    continue
                 if 48 <= n <= 57:  # 0-9
                     current += chr(n)
                     continue
@@ -178,7 +224,7 @@ while True:
                 if 64 <= n <= 126:
                     if current or params:
                         params.append(int(current) if current else 0)
-                    handle_csi(n, params)
+                    handle_csi(n, params, private)
                     break
             continue
         if n == 93:  # ']' (OSC)
