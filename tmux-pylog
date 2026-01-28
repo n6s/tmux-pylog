@@ -286,14 +286,20 @@ def main():
     default_term = os.environ.get("TMUX_PYLOG_TERM", "screen-256color")
 
     if tmux_session_exists(session):
+        run_tmux(["set-option", "-t", session, "default-terminal", default_term])
         result = run_tmux(["new-window", "-t", session, "-P", "-F", "#{window_index}"], capture=True)
         window_index = result.stdout.strip()
     else:
         run_tmux(["new-session", "-d", "-s", session])
         created_session = True
-        window_index = first_window_index(session)
-
-    run_tmux(["set-option", "-t", session, "default-terminal", default_term])
+        initial_index = first_window_index(session)
+        run_tmux(["set-option", "-t", session, "default-terminal", default_term])
+        if initial_index:
+            run_tmux(["respawn-window", "-k", "-t", f"{session}:{initial_index}"])
+            window_index = initial_index
+        else:
+            result = run_tmux(["new-window", "-t", session, "-P", "-F", "#{window_index}"], capture=True)
+            window_index = result.stdout.strip()
 
     target = f"{window_index}.{pane_index}"
 
