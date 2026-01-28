@@ -283,6 +283,7 @@ def main():
     session = "ops"
     pane_index = "0"
     created_session = False
+    default_term = os.environ.get("TMUX_PYLOG_TERM", "screen-256color")
 
     if tmux_session_exists(session):
         result = run_tmux(["new-window", "-t", session, "-P", "-F", "#{window_index}"], capture=True)
@@ -291,6 +292,8 @@ def main():
         run_tmux(["new-session", "-d", "-s", session])
         created_session = True
         window_index = first_window_index(session)
+
+    run_tmux(["set-option", "-t", session, "default-terminal", default_term])
 
     target = f"{window_index}.{pane_index}"
 
