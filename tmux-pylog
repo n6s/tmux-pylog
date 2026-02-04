@@ -19,7 +19,7 @@ carriage returns or backspaces are used (e.g., Ctrl-R).
 PY_FILTER = r"""
 import sys
 
-buf = bytearray()
+buf = []
 out = sys.stdout.buffer
 inp = sys.stdin.buffer
 cursor = 0
@@ -35,7 +35,7 @@ def read_byte():
     return b[0]
 
 def write_line():
-    line = bytes(buf)
+    line = b"".join(buf)
     if should_suppress_line(line):
         out.write(b"[tui output suppressed]\n")
         out.flush()
@@ -70,6 +70,27 @@ def insert_char(ch):
     else:
         buf[cursor] = ch
     cursor += 1
+
+def read_utf8_char(first_byte):
+    if first_byte < 0x80:
+        return bytes([first_byte])
+    if 0xC2 <= first_byte <= 0xDF:
+        needed = 1
+    elif 0xE0 <= first_byte <= 0xEF:
+        needed = 2
+    elif 0xF0 <= first_byte <= 0xF4:
+        needed = 3
+    else:
+        return b"?"
+    seq = bytearray([first_byte])
+    for _ in range(needed):
+        b = read_byte()
+        if b is None:
+            return b"?"
+        if b < 0x80 or b > 0xBF:
+            return b"?"
+        seq.append(b)
+    return bytes(seq)
 
 def handle_csi(final_byte, params, private):
     global cursor, sav_cursor, alt_screen, alt_suppressed, saw_cr
@@ -149,14 +170,14 @@ def handle_csi(final_byte, params, private):
     if final_byte == ord("@"):  # insert blanks
         n = params[0] if params else 1
         if n > 0:
-            buf[cursor:cursor] = b" " * n
+            buf[cursor:cursor] = [b" "] * n
         return
 
 while True:
     c = read_byte()
     if c is None:
         if buf:
-            out.write(buf)
+            out.write(b"".join(buf))
             out.flush()
         break
 
@@ -241,7 +262,10 @@ while True:
             continue
         continue
 
-    insert_char(c)
+    if c >= 0x80:
+        insert_char(read_utf8_char(c))
+    else:
+        insert_char(bytes([c]))
 """
 
 
