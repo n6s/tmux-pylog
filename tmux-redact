@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: tmux-redact [options]
+
+Interactive helper to redact a secret from the current tmux pane's log.
+
+Options:
+  -r, --replacement STR   replacement text (default: REDACTED)
+  -n, --dry-run           report matches but do not modify files
+  -h, --help              show this help message
+
+Behavior:
+- Requires running inside tmux.
+- Rewrites the log file in-place to preserve the inode (no pipe restart).
+- Targets ~/.cache/tmux-log/<session>/w<window>p<pane>.log (and raw-... if present).
+EOF
+}
+
+replacement="REDACTED"
+dry_run=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--replacement)
+      [[ $# -lt 2 ]] && { echo "Missing value for $1" >&2; exit 1; }
+      replacement="$2"
+      shift 2
+      ;;
+    -n|--dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ -z "${TMUX:-}" ]]; then
+  echo "tmux-redact must be run inside tmux." >&2
+  exit 1
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "tmux is required" >&2
+  exit 1
+fi
+
+session="$(tmux display-message -p '#{session_name}')"
+window_index="$(tmux display-message -p '#{window_index}')"
+pane_index="$(tmux display-message -p '#{pane_index}')"
+
+log_dir="$HOME/.cache/tmux-log/${session}"
+log_file="$log_dir/w${window_index}p${pane_index}.log"
+raw_log_file="$log_dir/raw-w${window_index}p${pane_index}.log"
+
+read -r -s -p "Secret to redact: " secret
+echo
+if [[ -z "$secret" ]]; then
+  echo "Nothing entered. Aborting." >&2
+  exit 1
+fi
+
+redact_file() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required for redaction." >&2
+    return 1
+  fi
+  if ! out="$(SECRET="$secret" REPLACEMENT="$replacement" DRY_RUN="$dry_run" python3 - "$path" 2>&1 <<'PY'
+import sys
+import os
+from pathlib import Path
+
+secret = os.environ.get("SECRET", "").encode("utf-8", "surrogatepass")
+replacement = os.environ.get("REPLACEMENT", "REDACTED").encode("utf-8", "surrogatepass")
+dry_run = os.environ.get("DRY_RUN", "0")
+if not secret:
+    sys.exit(1)
+path = Path(sys.argv[1])
+with path.open("r+b") as f:
+    raw = f.read()
+    count = raw.count(secret)
+    if count and dry_run != "1":
+        raw = raw.replace(secret, replacement)
+        f.seek(0)
+        f.truncate(0)
+        f.write(raw)
+print(count)
+PY
+  )"; then
+    echo "python3 failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+total=0
+count=0
+if [[ -f "$log_file" ]]; then
+  if count="$(redact_file "$log_file")"; then
+    echo "w${window_index}p${pane_index}.log: ${count} match(es)"
+    total=$((total + count))
+  else
+    echo "Failed to process w${window_index}p${pane_index}.log" >&2
+    exit 1
+  fi
+fi
+if [[ -f "$raw_log_file" ]]; then
+  if count="$(redact_file "$raw_log_file")"; then
+    echo "raw-w${window_index}p${pane_index}.log: ${count} match(es)"
+    total=$((total + count))
+  else
+    echo "Failed to process raw-w${window_index}p${pane_index}.log" >&2
+    exit 1
+  fi
+fi
+
+if [[ $dry_run -eq 1 ]]; then
+  echo "Dry run complete. ${total} total match(es) found in ${session} ${window_index}.${pane_index} log(s)."
+else
+  echo "Redacted ${total} occurrence(s) in ${session} ${window_index}.${pane_index} log(s)."
+fi
