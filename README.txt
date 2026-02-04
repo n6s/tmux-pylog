@@ -6,6 +6,7 @@ Quick start:
   ./tmux-log -s ops -t 1.0 -l ~/tmux-logs/ops.log # custom session/pane/log path
   ./tmux-log --current --fresh --auto-log         # inside tmux: log the active pane to ~/.cache/tmux-log/<session>/w<pane>.log (truncate first)
   ./tmux-pylog                                    # minimal Python logger for session "ops" (new window, auto log path)
+  ./tmux-redact                                   # redact a secret from the current pane's log, preserving piping
 Then ask Codex to read the log file you pointed tmux at (default: ~/.cache/tmux-log/window0.log).
 
 What it does:
