@@ -6,7 +6,7 @@ usage() {
   cat <<'EOF'
 Usage: tmux-redact [options]
 
-Interactive helper to redact a secret from the current tmux pane's log.
+Interactive helper to redact a secret from the ops tmux logs.
 
 Options:
   -r, --replacement STR   replacement text (default: REDACTED)
@@ -14,9 +14,8 @@ Options:
   -h, --help              show this help message
 
 Behavior:
-- Requires running inside tmux.
 - Rewrites the log file in-place to preserve the inode (no pipe restart).
-- Targets ~/.cache/tmux-log/<session>/w<window>p<pane>.log (and raw-... if present).
+- Targets ~/.cache/tmux-log/ops/*.log.
 EOF
 }
 
@@ -53,23 +52,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${TMUX:-}" ]]; then
-  echo "tmux-redact must be run inside tmux." >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required for redaction." >&2
   exit 1
 fi
 
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "tmux is required" >&2
+log_dir="$HOME/.cache/tmux-log/ops"
+if [[ ! -d "$log_dir" ]]; then
+  echo "Log directory not found: $log_dir" >&2
   exit 1
 fi
 
-session="$(tmux display-message -p '#{session_name}')"
-window_index="$(tmux display-message -p '#{window_index}')"
-pane_index="$(tmux display-message -p '#{pane_index}')"
-
-log_dir="$HOME/.cache/tmux-log/${session}"
-log_file="$log_dir/w${window_index}p${pane_index}.log"
-raw_log_file="$log_dir/raw-w${window_index}p${pane_index}.log"
+shopt -s nullglob
+log_files=("$log_dir"/*.log)
+shopt -u nullglob
+if [[ ${#log_files[@]} -eq 0 ]]; then
+  echo "No log files found in $log_dir" >&2
+  exit 1
+fi
 
 read -r -s -p "Secret to redact: " secret
 echo
@@ -82,10 +82,6 @@ redact_file() {
   local path="$1"
   if [[ ! -f "$path" ]]; then
     return 0
-  fi
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required for redaction." >&2
-    return 1
   fi
   if ! out="$(SECRET="$secret" REPLACEMENT="$replacement" DRY_RUN="$dry_run" python3 - "$path" 2>&1 <<'PY'
 import sys
@@ -117,27 +113,19 @@ PY
 
 total=0
 count=0
-if [[ -f "$log_file" ]]; then
-  if count="$(redact_file "$log_file")"; then
-    echo "w${window_index}p${pane_index}.log: ${count} match(es)"
+for path in "${log_files[@]}"; do
+  name="$(basename "$path")"
+  if count="$(redact_file "$path")"; then
+    echo "${name}: ${count} match(es)"
     total=$((total + count))
   else
-    echo "Failed to process w${window_index}p${pane_index}.log" >&2
+    echo "Failed to process ${name}" >&2
     exit 1
   fi
-fi
-if [[ -f "$raw_log_file" ]]; then
-  if count="$(redact_file "$raw_log_file")"; then
-    echo "raw-w${window_index}p${pane_index}.log: ${count} match(es)"
-    total=$((total + count))
-  else
-    echo "Failed to process raw-w${window_index}p${pane_index}.log" >&2
-    exit 1
-  fi
-fi
+done
 
 if [[ $dry_run -eq 1 ]]; then
-  echo "Dry run complete. ${total} total match(es) found in ${session} ${window_index}.${pane_index} log(s)."
+  echo "Dry run complete. ${total} total match(es) found in ${#log_files[@]} ops log(s)."
 else
-  echo "Redacted ${total} occurrence(s) in ${session} ${window_index}.${pane_index} log(s)."
+  echo "Redacted ${total} occurrence(s) across ${#log_files[@]} ops log(s)."
 fi
