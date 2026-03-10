@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
-import shlex
 
 
-USAGE = """\
-tmux-pylog
-
+DESCRIPTION = """\
 Starts/attaches tmux session "ops" and logs a new window's pane 0 with a
 Python filter that removes ANSI sequences and preserves the final line when
 carriage returns or backspaces are used (e.g., Ctrl-R).
@@ -269,6 +268,161 @@ while True:
 """
 
 
+PY_TEE = r"""
+import os
+import sys
+
+path = sys.argv[1]
+max_bytes = int(sys.argv[2])
+keep_bytes = int(sys.argv[3])
+inp = sys.stdin.buffer
+out = sys.stdout.buffer
+
+def trim_file(path, keep_bytes):
+    try:
+        size = os.path.getsize(path)
+    except FileNotFoundError:
+        return 0
+    if keep_bytes <= 0:
+        with open(path, "wb"):
+            pass
+        return 0
+    if size <= keep_bytes:
+        return size
+
+    start = max(0, size - keep_bytes)
+    with open(path, "rb") as src:
+        if start > 0:
+            src.seek(start - 1)
+            prev_byte = src.read(1)
+        else:
+            prev_byte = b"\n"
+        src.seek(start)
+        tail = src.read()
+
+    if start > 0 and prev_byte != b"\n":
+        newline = tail.find(b"\n")
+        if newline != -1:
+            tail = tail[newline + 1:]
+
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "wb") as dst:
+        dst.write(tail)
+    os.replace(tmp_path, path)
+    return len(tail)
+
+try:
+    size = os.path.getsize(path)
+except FileNotFoundError:
+    size = 0
+
+if max_bytes > 0 and size > max_bytes:
+    size = trim_file(path, keep_bytes)
+
+log = open(path, "ab", buffering=0)
+try:
+    while True:
+        chunk = inp.read(65536)
+        if not chunk:
+            break
+        log.write(chunk)
+        size += len(chunk)
+        out.write(chunk)
+        out.flush()
+        if max_bytes > 0 and size > max_bytes:
+            log.close()
+            size = trim_file(path, keep_bytes)
+            log = open(path, "ab", buffering=0)
+finally:
+    log.close()
+"""
+
+
+SIZE_SUFFIXES = {
+    "k": 1024,
+    "m": 1024 ** 2,
+    "g": 1024 ** 3,
+    "t": 1024 ** 4,
+}
+
+DEFAULT_MAX_BYTES = 50 * 1024 * 1024
+DEFAULT_KEEP_BYTES = 40 * 1024 * 1024
+
+
+def parse_size(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    suffix = text[-1].lower()
+    multiplier = 1
+    if suffix in SIZE_SUFFIXES:
+        multiplier = SIZE_SUFFIXES[suffix]
+        text = text[:-1].strip()
+    elif len(text) > 1 and text[-2:].lower() in ("kb", "mb", "gb", "tb"):
+        multiplier = SIZE_SUFFIXES[text[-2].lower()]
+        text = text[:-2].strip()
+    try:
+        size = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid size '{value}'; use bytes or K/M/G/T suffixes"
+        ) from exc
+    if size < 0:
+        raise argparse.ArgumentTypeError("size must be >= 0")
+    return size * multiplier
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="tmux-pylog",
+        description=DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Default cap: 50 MiB per file, keeping the newest 40 MiB after pruning.\n"
+            "Size caps apply independently to both the raw and cleaned logs.\n"
+            "Environment: TMUX_PYLOG_MAX_BYTES, TMUX_PYLOG_KEEP_BYTES, TMUX_PYLOG_TERM"
+        ),
+    )
+    parser.add_argument(
+        "--max-bytes",
+        metavar="SIZE",
+        default=os.environ.get("TMUX_PYLOG_MAX_BYTES"),
+        help="prune the oldest log content after a file grows past SIZE (default: 50M; supports K/M/G/T)",
+    )
+    parser.add_argument(
+        "--keep-bytes",
+        metavar="SIZE",
+        default=os.environ.get("TMUX_PYLOG_KEEP_BYTES"),
+        help="after pruning, keep roughly the newest SIZE bytes (default: 40M)",
+    )
+    return parser
+
+
+def parse_args(argv):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        args.max_bytes = parse_size(args.max_bytes)
+        args.keep_bytes = parse_size(args.keep_bytes)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+
+    if args.max_bytes is None:
+        args.max_bytes = DEFAULT_MAX_BYTES
+    if args.max_bytes == 0 and args.keep_bytes not in (None, 0):
+        parser.error("--keep-bytes requires --max-bytes")
+    if args.keep_bytes is None:
+        if args.max_bytes == DEFAULT_MAX_BYTES:
+            args.keep_bytes = DEFAULT_KEEP_BYTES
+        else:
+            args.keep_bytes = (args.max_bytes * 4) // 5 if args.max_bytes else 0
+    if args.max_bytes and args.keep_bytes >= args.max_bytes:
+        parser.error("--keep-bytes must be smaller than --max-bytes")
+    return args
+
+
 def run_tmux(args, capture=False, check=True):
     return subprocess.run(
         ["tmux", *args],
@@ -292,13 +446,7 @@ def first_window_index(session):
 
 
 def main():
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ("-h", "--help"):
-            print(USAGE)
-            return 0
-        print(f"Unknown option: {sys.argv[1]}", file=sys.stderr)
-        print(USAGE, file=sys.stderr)
-        return 1
+    args = parse_args(sys.argv[1:])
 
     if not shutil.which("tmux"):
         print("tmux is required", file=sys.stderr)
@@ -333,15 +481,19 @@ def main():
     raw_log_file = os.path.join(log_dir, f"raw-w{window_index}p{pane_index}.log")
 
     python_cmd = f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_FILTER)}"
-    tee_cmd = "tee"
-    stdbuf = shutil.which("stdbuf")
-    if stdbuf:
-        tee_cmd = f"{stdbuf} -oL -eL {tee_cmd}"
+    raw_writer_cmd = (
+        f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_TEE)} "
+        f"{shlex.quote(raw_log_file)} {args.max_bytes} {args.keep_bytes}"
+    )
+    clean_writer_cmd = (
+        f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_TEE)} "
+        f"{shlex.quote(log_file)} {args.max_bytes} {args.keep_bytes}"
+    )
 
     pipe_cmd = (
-        f"{tee_cmd} -a {shlex.quote(raw_log_file)}"
+        f"{raw_writer_cmd}"
         f" | {python_cmd}"
-        f" | {tee_cmd} -a {shlex.quote(log_file)}"
+        f" | {clean_writer_cmd}"
     )
 
     run_tmux(["pipe-pane", "-t", f"{session}:{target}", ""])
