@@ -275,7 +275,8 @@ import sys
 path = sys.argv[1]
 max_bytes = int(sys.argv[2])
 keep_bytes = int(sys.argv[3])
-inp = sys.stdin.buffer
+passthrough = sys.argv[4] == "1"
+inp_fd = sys.stdin.fileno()
 out = sys.stdout.buffer
 
 def trim_file(path, keep_bytes):
@@ -322,13 +323,14 @@ if max_bytes > 0 and size > max_bytes:
 log = open(path, "ab", buffering=0)
 try:
     while True:
-        chunk = inp.read(65536)
+        chunk = os.read(inp_fd, 65536)
         if not chunk:
             break
         log.write(chunk)
         size += len(chunk)
-        out.write(chunk)
-        out.flush()
+        if passthrough:
+            out.write(chunk)
+            out.flush()
         if max_bytes > 0 and size > max_bytes:
             log.close()
             size = trim_file(path, keep_bytes)
@@ -483,11 +485,11 @@ def main():
     python_cmd = f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_FILTER)}"
     raw_writer_cmd = (
         f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_TEE)} "
-        f"{shlex.quote(raw_log_file)} {args.max_bytes} {args.keep_bytes}"
+        f"{shlex.quote(raw_log_file)} {args.max_bytes} {args.keep_bytes} 1"
     )
     clean_writer_cmd = (
         f"{shlex.quote(sys.executable)} -u -c {shlex.quote(PY_TEE)} "
-        f"{shlex.quote(log_file)} {args.max_bytes} {args.keep_bytes}"
+        f"{shlex.quote(log_file)} {args.max_bytes} {args.keep_bytes} 0"
     )
 
     pipe_cmd = (
